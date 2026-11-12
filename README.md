@@ -37,3 +37,5 @@ The Worker requires the D1 binding `DB`, the static asset binding `ASSETS`, and 
 
 ## Local checks
 The JavaScript files pass Node syntax checks. Live deployment still requires the Cloudflare D1 database ID, secrets and account authorization.
+
+<!-- Cloudflare deployment refresh -->
