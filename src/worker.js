@@ -1,19 +1,9 @@
 const json=(data,status=200)=>new Response(JSON.stringify(data),{status,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store'}});
 const now=()=>new Date().toISOString();
-const enc=s=>new TextEncoder().encode(s);
-const b64=b=>btoa(String.fromCharCode(...new Uint8Array(b))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
-async function sign(value,secret){const key=await crypto.subtle.importKey('raw',enc(secret),{name:'HMAC',hash:'SHA-256'},false,['sign']);return b64(await crypto.subtle.sign('HMAC',key,enc(value)));}
-async function sessionToken(secret){const payload=b64(enc(JSON.stringify({exp:Date.now()+7*864e5,role:'owner'})));return payload+'.'+await sign(payload,secret)}
-async function authorized(req,env){const pair=(req.headers.get('cookie')||'').split(';').map(x=>x.trim()).find(x=>x.startsWith('qlai_session='));if(!pair)return false;const raw=pair.substring('qlai_session='.length);const dot=raw.lastIndexOf('.');if(dot<1)return false;const p=raw.slice(0,dot),s=raw.slice(dot+1);if(!p||!s||s!==await sign(p,env.SESSION_SECRET||''))return false;try{let payload=p.replace(/-/g,'+').replace(/_/g,'/');payload+='='.repeat((4-payload.length%4)%4);return JSON.parse(atob(payload)).exp>Date.now()}catch{return false}}
-const cookie=(v,max=604800)=>`qlai_session=${v}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=${max}`;
 async function log(env,event,detail=''){await env.DB.prepare('INSERT INTO activity(id,event,detail,created_at) VALUES(?,?,?,?)').bind(crypto.randomUUID(),event,detail,now()).run()}
 export default { async fetch(req,env){const u=new URL(req.url),p=u.pathname,m=req.method;
  if(p==='/api/health'&&m==='GET')return json({ok:true,app:'Quantum Leads AI',database:!!env.DB,ai:!!env.AI,version:'cloudflare-mvp-1'});
- if(p==='/api/login'&&m==='POST'){if(!env.OWNER_PASSWORD||!env.SESSION_SECRET)return json({error:'Owner secrets are not configured.'},503);const body=await req.json().catch(()=>({}));if(typeof body.password!=='string'||body.password.length>256||body.password!==env.OWNER_PASSWORD)return json({error:'Incorrect password.'},401);const token=await sessionToken(env.SESSION_SECRET);return new Response(JSON.stringify({ok:true}),{headers:{'content-type':'application/json','set-cookie':cookie(token)}})}
- if(p==='/api/logout'&&m==='POST')return new Response(JSON.stringify({ok:true}),{headers:{'content-type':'application/json','set-cookie':cookie('',0)}});
- if(p==='/api/session'&&m==='GET')return json({authenticated:await authorized(req,env)});
  if(!p.startsWith('/api/'))return env.ASSETS.fetch(req);
- if(!(await authorized(req,env)))return json({error:'Authentication required.'},401);
  if(p==='/api/leads'&&m==='GET'){const {results}=await env.DB.prepare('SELECT * FROM leads ORDER BY created_at DESC LIMIT 1000').all();return json(results)}
  if(p==='/api/leads'&&m==='POST'){const x=await req.json();if(!x.name?.trim())return json({error:'Lead name is required.'},400);const id=crypto.randomUUID(),t=now();await env.DB.prepare('INSERT INTO leads(id,name,company,email,source,status,notes,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)').bind(id,x.name.trim(),x.company||'',x.email||'',x.source||'',x.status||'New',x.notes||'',t,t).run();await log(env,'lead.created',x.name);return json({id,...x,created_at:t},201)}
  const lm=p.match(/^\/api\/leads\/([\w-]+)$/);if(lm){const id=lm[1];if(m==='PUT'){const x=await req.json();await env.DB.prepare('UPDATE leads SET name=?,company=?,email=?,source=?,status=?,notes=?,updated_at=? WHERE id=?').bind(x.name||'',x.company||'',x.email||'',x.source||'',x.status||'New',x.notes||'',now(),id).run();return json({ok:true})}if(m==='DELETE'){await env.DB.prepare('DELETE FROM leads WHERE id=?').bind(id).run();await log(env,'lead.deleted',id);return json({ok:true})}}
